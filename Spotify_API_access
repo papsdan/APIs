@@ -1,0 +1,164 @@
+import base64
+import datetime
+from urllib.parse import urlencode
+import json
+import requests
+import time
+from functools import reduce
+
+
+class SpotifyAPI(object):
+    access_token = None
+    access_token_expires = datetime.datetime.now()
+    access_token_did_expire = True
+    client_id = None
+    client_secret = None
+    token_url = "https://accounts.spotify.com/api/token"
+
+    def __init__(self, client_id, client_secret, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.client_id = client_id
+        self.client_secret = client_secret
+
+    def get_client_credentials(self):
+        """
+        Returns a base64 encoded string
+        """
+        client_id = self.client_id
+        client_secret = self.client_secret
+        if client_secret == None or client_id == None:
+            raise Exception("You must set client_id and client_secret")
+        client_creds = f"{client_id}:{client_secret}"
+        client_creds_b64 = base64.b64encode(client_creds.encode())
+        return client_creds_b64.decode()
+
+    def get_token_headers(self):
+        client_creds_b64 = self.get_client_credentials()
+        return {
+            "Authorization": f"Basic {client_creds_b64}",
+            "Content-Type": "application/x-www-form-urlencoded"
+
+        }
+
+    def get_token_data(self):
+        return {
+            "grant_type": "client_credentials"
+        } 
+
+    def perform_auth(self):
+        token_url = self.token_url
+        token_data = self.get_token_data()
+        token_headers = self.get_token_headers()
+        r = requests.post(token_url, data=token_data, headers=token_headers)
+        if r.status_code not in range(200, 299):
+            raise Exception("Could not authenticate client.")
+            # return False
+        data = r.json()
+        now = datetime.datetime.now()
+        access_token = data['access_token']
+        expires_in = data['expires_in'] # seconds
+        expires = now + datetime.timedelta(seconds=expires_in)
+        self.access_token = access_token
+        self.access_token_expires = expires
+        self.access_token_did_expire = expires < now
+        return True
+
+    def get_access_token(self):
+        token = self.access_token
+        expires = self.access_token_expires
+        now = datetime.datetime.now()
+        if expires < now:
+            self.perform_auth()
+            return self.get_access_token()
+        elif token == None:
+            self.perform_auth()
+            return self.get_access_token() 
+        return token
+
+    def get_resource_header(self):
+        access_token = self.get_access_token()
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        return headers
+    
+    def get_resource(self, lookup_id, resource_type='artists', version='v1',extension='',limit=50,offset=0):
+        endpoint = f"https://api.spotify.com/{version}/{resource_type}/{lookup_id}/{extension}?offset={offset}&limit={limit}"
+        headers = self.get_resource_header()
+        r = requests.get(endpoint, headers=headers)
+        if r.status_code not in range(200, 299):
+            return {}
+        return r.json()
+    def get_album(self, _id):
+        return self.get_resource(_id, resource_type='albums')
+
+    def get_artist(self, _id):
+        return self.get_resource(_id, resource_type='artists')
+    
+    def get_playlist(self, _id):
+        return self.get_resource(_id, resource_type='playlists')
+    
+    def base_search(self, query_params): # type
+        headers = self.get_resource_header()
+        endpoint = "https://api.spotify.com/v1/search"
+        lookup_url = f"{endpoint}?{query_params}"
+        r = requests.get(lookup_url, headers=headers)
+        if r.status_code not in range(200, 299):  
+            return {}
+        return r.json()
+
+    def search(self, query=None, operator=None, operator_query=None, search_type='artist',offset='0',limit='50'):
+        if query == None:
+            raise Exception("A query is required")
+        if isinstance(query, dict):
+            query = " ".join([f"{k}:{v}" for k,v in query.items()])
+        if operator != None and operator_query != None:
+            if operator.lower() == "or" or operator.lower() == "not":
+                operator = operator.upper()
+                if isinstance(operator_query, str):
+                    query = f"{query} {operator} {operator_query}"
+        query_params = urlencode({"q": query, "type": search_type.lower(),"offset":offset,"limit":limit})
+        return self.base_search(query_params)
+
+    def artist_song_metadata(self,lookup_id):
+        artist_albums_dict = spotify.get_resource(lookup_id, resource_type='artists', version='v1',extension='albums')
+        album_id_list = []
+        for artist_album in artist_albums_dict['items']:
+            album_id = artist_album['id']
+            album_id_list.append(album_id)
+
+        album_songs_id_list = []
+        for i in album_id_list:
+            album_songs_dict = spotify.get_resource(lookup_id=i, resource_type='albums', version='v1',extension='tracks')
+            for j in album_songs_dict['items']:
+                song_id = j['id']
+                album_songs_id_list.append(song_id)
+
+        track_level = []
+        album_level = []
+        audio_feature_level = []
+
+        for k in album_songs_id_list:
+            single_song_dict = spotify.get_resource(lookup_id=k, resource_type='tracks', version='v1')
+            single_song_dict['TRACK_ID'] = k
+            track_level.append(single_song_dict)
+            album_level_variable = single_song_dict['album']
+            time.sleep(.05)
+            album_level_variable['TRACK_ID'] = k
+            album_level.append(album_level_variable)
+            single_song_audio_features_dict = spotify.get_resource(lookup_id=k, resource_type='audio-features', version='v1')
+            single_song_audio_features_dict['TRACK_ID'] = k
+            audio_feature_level.append(single_song_audio_features_dict)
+
+        track_level_df = pd.DataFrame.from_dict(track_level)
+        album_level_df = pd.DataFrame.from_dict(album_level)
+        audio_feature_level_df = pd.DataFrame.from_dict(audio_feature_level)
+
+
+        dfs = [track_level_df,album_level_df,audio_feature_level_df]
+
+        df_final = reduce(lambda left,right: pd.merge(left,right,on='TRACK_ID'), dfs)
+        df_final.columns = df_final.columns.str.replace('_x', '_track')
+        df_final.columns = df_final.columns.str.replace('_y', '_artist')
+
+        return df_final
