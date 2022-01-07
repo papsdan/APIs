@@ -121,25 +121,39 @@ class SpotifyAPI(object):
         query_params = urlencode({"q": query, "type": search_type.lower(),"offset":offset,"limit":limit})
         return self.base_search(query_params)
 
-    def artist_song_metadata(self,lookup_id):
-        artist_albums_dict = spotify.get_resource(lookup_id, resource_type='artists', version='v1',extension='albums')
+    def get_artist_album_id_list(self,artist_id):
+        artist_albums_dict = spotify.get_resource(artist_id, resource_type='artists', version='v1',extension='albums')
         album_id_list = []
         for artist_album in artist_albums_dict['items']:
             album_id = artist_album['id']
             album_id_list.append(album_id)
-
+        return album_id_list
+    
+    def get_album_song_id_list(self,artist_id):
+        album_id_list = spotify.get_artist_album_id_list(artist_id)
         album_songs_id_list = []
         for i in album_id_list:
             album_songs_dict = spotify.get_resource(lookup_id=i, resource_type='albums', version='v1',extension='tracks')
             for j in album_songs_dict['items']:
                 song_id = j['id']
                 album_songs_id_list.append(song_id)
-
+        return album_songs_id_list
+    
+    def get_playlist_song_id_list(self,playlist_id):
+        playlist_songs_dict = spotify.get_resource(lookup_id=playlist_id, resource_type='playlists', version='v1',extension='tracks')
+        song_id_list = []
+        for song in playlist_songs_dict['items']:
+            song_id = song['track']['id']
+            song_id_list.append(song_id)
+        return song_id_list
+        
+    def metadata(self,songs_id_list):
+        
         track_level = []
         album_level = []
         audio_feature_level = []
 
-        for k in album_songs_id_list:
+        for k in songs_id_list:
             single_song_dict = spotify.get_resource(lookup_id=k, resource_type='tracks', version='v1')
             single_song_dict['TRACK_ID'] = k
             track_level.append(single_song_dict)
